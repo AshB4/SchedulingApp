@@ -1,0 +1,55 @@
+.textBox-error::placeholder {
+    color: #770016
+}
+.textBox-normal::placeholder {
+    color: #949AA4
+}
+
+/* Amplify Component Styling */
+:root, [data-amplify-theme] {
+    --amplify-radii-small: 8px;
+    --amplify-components-fieldcontrol-focus-box-shadow: 0px 0px 0px 0px;
+    --amplify-components-textfield-border-color: #E1E3E8;
+    --amplify-components-button-border-color: #E1E3E8;
+    --amplify-components-passwordfield-button-focus-border-color: #E1E3E8;
+    --amplify-components-textfield-focus-border-color: #0066AD;
+}
+
+.email .amplify-input {
+    background-color: #F8F9FA;
+    color: #949AA4;
+    font-family: 'Inter';
+    font-size: 14px;
+}
+
+.amplify-input--error {
+    background-color: #FFE5EA;
+    color: #770016;
+}
+.pass .amplify-input,
+.pass .amplify-button {
+    background-color: #F8F9FA;
+    color: #949AA4;
+    font-family: 'Inter';
+    font-size: 14px;
+}
+
+.amplify-input::placeholder {
+    background-color: #F8F9FA;
+    color: #949AA4;
+}
+.amplify-input--error::placeholder {
+    background-color: #FFE5EA;
+    color: #770016;
+}
+
+.amplify-button:hover {
+    border-color: #E1E3E8;
+}
+
+/* MUI components */
+/* My Availability */
+.MuiSelect-root.MuiOutlinedInput-input {
+    padding: 10px 14px;
+    width: 65px;
+}

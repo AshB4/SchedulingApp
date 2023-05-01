@@ -1,0 +1,12 @@
+version = 0.1
+[default]
+[default.deploy]
+[default.deploy.parameters]
+stack_name = "mesa-stack"
+s3_bucket = "mesa-intermediate-bucket"
+s3_prefix = "dev"
+region = "us-east-1"
+confirm_changeset = false
+capabilities = "CAPABILITY_IAM"
+tags = "project=\"impactly\" stage=\"dev\""
+

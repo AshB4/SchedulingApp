@@ -1,0 +1,184 @@
+AWSTemplateFormatVersion: 2010-09-09
+Parameters:
+  Repo:
+    Type: String
+    Default: MESA
+  ProjectName:
+    Type: String
+    Default: MESA
+    Description: Name for the project, used in the code repository, CloudFront distribution, Lambda@Edge function, and pipeline resource names
+
+Mappings:
+  Region2S3WebsiteSuffix:
+    us-east-1:
+      Suffix: .s3-website-us-east-1.amazonaws.com
+    us-west-1:
+      Suffix: .s3-website-us-west-1.amazonaws.com
+    us-west-2:
+      Suffix: .s3-website-us-west-2.amazonaws.com
+    eu-west-1:
+      Suffix: .s3-website-eu-west-1.amazonaws.com
+    ap-northeast-1:
+      Suffix: .s3-website-ap-northeast-1.amazonaws.com
+    ap-northeast-2:
+      Suffix: .s3-website-ap-northeast-2.amazonaws.com
+    ap-southeast-1:
+      Suffix: .s3-website-ap-southeast-1.amazonaws.com
+    ap-southeast-2:
+      Suffix: .s3-website-ap-southeast-2.amazonaws.com
+    ap-south-1:
+      Suffix: .s3-website-ap-south-1.amazonaws.com
+    us-east-2:
+      Suffix: .s3-website-us-east-2.amazonaws.com
+    sa-east-1:
+      Suffix: .s3-website-sa-east-1.amazonaws.com
+    cn-north-1:
+      Suffix: .s3-website.cn-north-1.amazonaws.com.cn
+    eu-central-1:
+      Suffix: .s3-website.eu-central-1.amazonaws.com
+
+Resources:
+  # CodeCommit repository for the service
+  CodeRepository:
+    Type: AWS::CodeCommit::Repository
+    Properties:
+      RepositoryName: !Sub "${Repo}"
+      RepositoryDescription: !Sub "Repository for the ${ProjectName} project"
+      Tags:
+        - Key: "rsi:project:name"
+          Value: "MESA"
+        - Key: "rsi:project:creator"
+          Value: "Lane Thompson"
+        - Key: "rsi:project:requester"
+          Value: "Market Expansion Selection Application"
+        - Key: "rsi:project:description"
+          Value: "Market Expansion Selection Application"
+
+  S3ForCICD:
+    Type: AWS::S3::Bucket
+    Properties:
+      AccessControl: PublicRead
+      BucketName: mesa-intermediate-bucket
+      Tags:
+        - Key: "rsi:project:name"
+          Value: "MESA"
+        - Key: "rsi:project:creator"
+          Value: "Lane Thompson"
+        - Key: "rsi:project:requester"
+          Value: "Market Expansion Selection Application"
+        - Key: "rsi:project:description"
+          Value: "Market Expansion Selection Application"
+
+  AmplifyRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: 2012-10-17
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service:
+                - amplify.amazonaws.com
+            Action:
+              - sts:AssumeRole
+      Policies:
+        - PolicyName: Amplify
+          PolicyDocument:
+            Version: 2012-10-17
+            Statement:
+              - Effect: Allow
+                Action: "codecommit:*"
+                Resource: "*"
+              - Effect: Allow
+                Action: "amplify:*"
+                Resource: "*"
+      Tags:
+        - Key: "rsi:project:name"
+          Value: "MESA"
+        - Key: "rsi:project:creator"
+          Value: "Lane Thompson"
+        - Key: "rsi:project:requester"
+          Value: "Market Expansion Selection Application"
+        - Key: "rsi:project:description"
+          Value: "Market Expansion Selection Application"
+
+  AmplifyApp:
+    Type: "AWS::Amplify::App"
+    Properties:
+      Name: MESA
+      Repository: !GetAtt CodeRepository.CloneUrlHttp
+      Description: !Sub "MESA Dashboard"
+      # bug if buildSpec is not provided - https://github.com/aws-amplify/amplify-hosting/issues/1995
+      BuildSpec: |-
+        version: 1
+        frontend:
+          phases:
+            preBuild:
+              commands:
+                - npm ci
+            build:
+              commands:
+                - npm run build
+          artifacts:
+            baseDirectory: build
+            files:
+              - '**/*'
+          cache:
+            paths:
+              - node_modules/**/*
+      IAMServiceRole: !GetAtt AmplifyRole.Arn
+      AutoBranchCreationConfig:
+        EnableAutoBranchCreation: false
+        EnableAutoBuild: true
+        Stage: PRODUCTION
+      CustomRules:
+        - Source: "/<*>"
+          Target: "/index.html"
+          Status: "404-200"
+      EnvironmentVariables:
+        - Name: AMPLIFY_DIFF_DEPLOY
+          Value: true
+      Tags:
+        - Key: "rsi:project:name"
+          Value: "MESA"
+        - Key: "rsi:project:creator"
+          Value: "Lane Thompson"
+        - Key: "rsi:project:requester"
+          Value: "Market Expansion Selection Application"
+        - Key: "rsi:project:description"
+          Value: "Market Expansion Selection Application"
+
+  AmplifyBranch:
+    Type: AWS::Amplify::Branch
+    Properties:
+      BranchName: master
+      Stage: PRODUCTION
+      AppId: !GetAtt AmplifyApp.AppId
+      Description: !Sub "master Branch"
+      EnableAutoBuild: true
+      Tags:
+        - Key: "rsi:project:name"
+          Value: "MESA"
+        - Key: "rsi:project:creator"
+          Value: "Lane Thompson"
+        - Key: "rsi:project:requester"
+          Value: "Market Expansion Selection Application"
+        - Key: "rsi:project:description"
+          Value: "Market Expansion Selection Application"
+
+  # AmplifyDomain:
+  #   Type: AWS::Amplify::Domain
+  #   Properties:
+  #     AppId: !GetAtt AmplifyApp.AppId
+  #     SubDomainSettings:
+  #       - Prefix: "master"
+  #         BranchName: "master"
+  #     Tags:
+  #       - Key: "rsi:project:name"
+  #         Value: "MESA"
+  #       - Key: "rsi:project:creator"
+  #         Value: "Lane Thompson"
+  #       - Key: "rsi:project:requester"
+  #         Value: "Market Expansion Selection Application"
+  #       - Key: "rsi:project:description"
+  #         Value: "Market Expansion Selection Application"

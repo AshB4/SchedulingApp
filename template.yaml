@@ -1,0 +1,713 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Transform: AWS::Serverless-2016-10-31
+Description: >
+  simple-websockets-chat-app
+
+  SAM Template for simple-websockets-chat-app that has the DynamoDB table and Lambda
+  functions needed to demonstrate the Websocket protocol on API Gateway.
+Parameters:
+  BranchName:
+    Type: String
+    Default: master
+    Description: Name for the project, used in the code repository, CloudFront distribution, Lambda@Edge function, and pipeline resource names
+  ProjectName:
+    Type: String
+    Default: MESA
+    Description: Name for the project, used in the code repository, CloudFront distribution, Lambda@Edge function, and pipeline resource names
+  stageName:
+    Description: Base path for apis
+    Type: String
+    Default: prod
+
+Mappings:
+  Region2S3WebsiteSuffix:
+    us-east-1:
+      Suffix: .s3-website-us-east-1.amazonaws.com
+    us-west-1:
+      Suffix: .s3-website-us-west-1.amazonaws.com
+    us-west-2:
+      Suffix: .s3-website-us-west-2.amazonaws.com
+    eu-west-1:
+      Suffix: .s3-website-eu-west-1.amazonaws.com
+    ap-northeast-1:
+      Suffix: .s3-website-ap-northeast-1.amazonaws.com
+    ap-northeast-2:
+      Suffix: .s3-website-ap-northeast-2.amazonaws.com
+    ap-southeast-1:
+      Suffix: .s3-website-ap-southeast-1.amazonaws.com
+    ap-southeast-2:
+      Suffix: .s3-website-ap-southeast-2.amazonaws.com
+    ap-south-1:
+      Suffix: .s3-website-ap-south-1.amazonaws.com
+    us-east-2:
+      Suffix: .s3-website-us-east-2.amazonaws.com
+    sa-east-1:
+      Suffix: .s3-website-sa-east-1.amazonaws.com
+    cn-north-1:
+      Suffix: .s3-website.cn-north-1.amazonaws.com.cn
+    eu-central-1:
+      Suffix: .s3-website.eu-central-1.amazonaws.com
+
+Resources:
+  # WebsiteCDN:
+  #   Type: AWS::CloudFront::Distribution
+  #   Properties:
+  #     DistributionConfig:
+  #       Comment: CDN for S3-backed website
+  #       ViewerCertificate:
+  #         AcmCertificateArn: !Ref CertificateArn
+  #         SslSupportMethod: sni-only
+  #       Aliases:
+  #         - !Ref domainNameWeb
+  #       Enabled: "true"
+  #       DefaultCacheBehavior:
+  #         ForwardedValues:
+  #           QueryString: "true"
+  #         TargetOriginId: only-origin
+  #         ViewerProtocolPolicy: allow-all
+  #       DefaultRootObject: index.html
+  #       Origins:
+  #         - CustomOriginConfig:
+  #             HTTPPort: "80"
+  #             HTTPSPort: "443"
+  #             OriginProtocolPolicy: http-only
+  #           DomainName:
+  #             !Join [
+  #               "",
+  #               [
+  #                 !Ref "S3BucketForWebsiteContent",
+  #                 !FindInMap [
+  #                   Region2S3WebsiteSuffix,
+  #                   !Ref "AWS::Region",
+  #                   Suffix,
+  #                 ],
+  #               ],
+  #             ]
+  #           Id: only-origin
+  # WebsiteDNSName:
+  #   Type: AWS::Route53::RecordSet
+  #   Properties:
+  #     HostedZoneName: !Join ["", [!Ref "HostedZone", .]]
+  #     Comment: CNAME redirect custom name to CloudFront distribution
+  #     Name: !Ref domainNameWeb
+  #     Type: A
+  #     AliasTarget:
+  #       DNSName: !GetAtt WebsiteCDN.DomainName
+  #       HostedZoneId: Z2FDTNDATAQYW2
+
+  # S3 Bucket for build artifacts
+  BuildArtifactsBucket:
+    Type: AWS::S3::Bucket
+
+  # CodeBuild role & project
+  CodeBuildServiceRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Action:
+              - "sts:AssumeRole"
+            Effect: Allow
+            Principal:
+              Service:
+                - codebuild.amazonaws.com
+      Path: /
+      Policies:
+        - PolicyName: CodeBuildAccess
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Resource:
+                  - !Sub "arn:aws:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/codebuild/${ProjectName}-build"
+                  - !Sub "arn:aws:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/codebuild/${ProjectName}-build:*"
+                Action:
+                  - "logs:CreateLogGroup"
+                  - "logs:CreateLogStream"
+                  - "logs:PutLogEvents"
+              - Effect: Allow
+                Resource:
+                  - "*"
+                Action:
+                  - "*"
+
+  CodeBuildProject:
+    Type: AWS::CodeBuild::Project
+    Properties:
+      Name: !Sub "${ProjectName}-${stageName}-build"
+      Description: Build project for Lambda@Edge
+      Artifacts:
+        Type: CODEPIPELINE
+      Environment:
+        Type: LINUX_CONTAINER
+        ComputeType: BUILD_GENERAL1_SMALL
+        Image: aws/codebuild/standard:4.0
+        PrivilegedMode: true
+        EnvironmentVariables:
+          - Name: BUILD_OUTPUT_BUCKET
+            Value: !Ref BuildArtifactsBucket
+      ServiceRole: !GetAtt CodeBuildServiceRole.Arn
+      Source:
+        Type: CODEPIPELINE
+
+  # CloudFormation role
+  CloudFormationExecutionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          Action:
+            - "sts:AssumeRole"
+          Effect: Allow
+          Principal:
+            Service:
+              - cloudformation.amazonaws.com
+      Path: /
+      Policies:
+        - PolicyName: CloudFormationPolicy
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Action:
+                  - cloudfront:*
+                  - lambda:*
+                  - cloudformation:*
+                  - iam:*
+                  - route53:*
+                Effect: Allow
+                Resource: "*"
+              - Action:
+                  - "s3:GetObject"
+                Effect: Allow
+                Resource:
+                  - !Sub "arn:aws:s3:::${BuildArtifactsBucket}/*"
+
+  # CodePipeline definition and role
+  PipelineExecutionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Action:
+              - "sts:AssumeRole"
+            Effect: Allow
+            Principal:
+              Service:
+                - codepipeline.amazonaws.com
+      Path: /
+      Policies:
+        - PolicyName: CodePipelineAccess
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Action:
+                  - iam:PassRole
+                  - codecommit:CancelUploadArchive
+                  - codecommit:GetBranch
+                  - codecommit:GetCommit
+                  - codecommit:GetUploadArchiveStatus
+                  - codecommit:UploadArchive
+                  - cloudformation:*
+                  - codebuild:BatchGetBuilds
+                  - codebuild:StartBuild
+                  - lambda:InvokeFunction
+                  - lambda:ListFunctions
+                  - route53:*
+                Effect: Allow
+                Resource: "*"
+              - Action:
+                  - "s3:*"
+                Effect: Allow
+                Resource:
+                  - !Sub "arn:aws:s3:::${BuildArtifactsBucket}/*"
+
+  Pipeline:
+    Type: AWS::CodePipeline::Pipeline
+    Properties:
+      ArtifactStore:
+        Location: !Ref BuildArtifactsBucket
+        Type: S3
+      Name: !Sub ${ProjectName}-${stageName}-pipeline
+      RoleArn: !GetAtt PipelineExecutionRole.Arn
+      Stages:
+        - Name: Source
+          Actions:
+            - Name: CodeCommitRepo
+              ActionTypeId:
+                Category: Source
+                Owner: AWS
+                Provider: CodeCommit
+                Version: "1"
+              Configuration:
+                RepositoryName: Impactly
+                BranchName: !Sub "${BranchName}"
+              OutputArtifacts:
+                - Name: SourceZip
+              RunOrder: 1
+        - Name: Build
+          Actions:
+            - Name: CodeBuild
+              ActionTypeId:
+                Category: Build
+                Owner: AWS
+                Provider: CodeBuild
+                Version: "1"
+              Configuration:
+                ProjectName: !Ref CodeBuildProject
+              InputArtifacts:
+                - Name: SourceZip
+              OutputArtifacts:
+                - Name: BuiltZip
+
+  SESEndpoint:
+    Type: "AWS::EC2::VPCEndpoint"
+    Properties:
+      SubnetIds:
+        - !Ref PrivateSubnet1
+        - !Ref PrivateSubnet2
+      SecurityGroupIds:
+        - !Ref NoIngressSecurityGroup
+      ServiceName: !Sub "com.amazonaws.${AWS::Region}.email-smtp"
+      PrivateDnsEnabled: True
+      VpcEndpointType: Interface
+      VpcId: !Ref VPC
+
+  OpenSearchRole:
+    Type: "AWS::IAM::ServiceLinkedRole"
+    Properties:
+      AWSServiceName: es.amazonaws.com
+      Description: "Role for ES to access resources in my VPC"
+
+  OpenSearchServiceDomain:
+    Type: "AWS::OpenSearchService::Domain"
+    DependsOn: [OpenSearchRole]
+    Properties:
+      DomainName: !Sub "${stageName}-elastic-search"
+      EngineVersion: "OpenSearch_1.1"
+      ClusterConfig:
+        InstanceCount: "1"
+        InstanceType: "m3.medium.search"
+      EBSOptions:
+        EBSEnabled: true
+        Iops: "0"
+        VolumeSize: "10"
+        VolumeType: "standard"
+      AccessPolicies:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal: "*"
+            Action: "es:*"
+            Resource: "*"
+      AdvancedOptions:
+        rest.action.multi.allow_explicit_index: true
+      VPCOptions:
+        SubnetIds:
+          - !Ref PrivateSubnet1
+        SecurityGroupIds:
+          - !Ref NoIngressSecurityGroup
+
+  EventCFDistribution:
+    Type: AWS::CloudFront::Distribution
+    Properties:
+      DistributionConfig:
+        Enabled: "true"
+        ViewerCertificate:
+          AcmCertificateArn: !Ref CertificateArn
+          SslSupportMethod: sni-only
+        Aliases:
+          - !Ref domainNameEvents
+        Origins:
+          - Id: EventOrigin
+            DomainName: aws.amazon.com
+            CustomOriginConfig:
+              HTTPPort: "80"
+              HTTPSPort: "443"
+              OriginProtocolPolicy: match-viewer
+            OriginCustomHeaders:
+              - HeaderName: "X-Env-Kinesis"
+                HeaderValue: !Ref EventStream
+        DefaultCacheBehavior:
+          TargetOriginId: EventOrigin
+          AllowedMethods:
+            - HEAD
+            - DELETE
+            - POST
+            - GET
+            - OPTIONS
+            - PUT
+            - PATCH
+          LambdaFunctionAssociations:
+            - EventType: origin-request
+              LambdaFunctionARN: !Ref EdgeScheduleFunction.Version
+              IncludeBody: true
+          ForwardedValues:
+            QueryString: "true"
+            Headers:
+              - "*"
+            Cookies:
+              Forward: all
+          ViewerProtocolPolicy: allow-all
+
+  S3BucketForEventsDNSName:
+    Type: AWS::Route53::RecordSet
+    Properties:
+      HostedZoneName: !Join ["", [!Ref "HostedZone", .]]
+      Comment: CNAME redirect custom name to CloudFront distribution
+      Name: !Ref domainNameEvents
+      Type: A
+      AliasTarget:
+        DNSName: !GetAtt EventCFDistribution.DomainName
+        HostedZoneId: Z2FDTNDATAQYW2
+
+  EdgeScheduleFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      CodeUri: backend/schedule/triggerEdge
+      Role: !GetAtt EdgeScheduleFunctionRoles.Arn
+      Runtime: nodejs14.x
+      Handler: index.handler
+      Timeout: 5
+      AutoPublishAlias: live
+
+  EdgeScheduleFunctionRoles:
+    Type: "AWS::IAM::Role"
+    Properties:
+      Path: "/"
+      ManagedPolicyArns:
+        - "arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole"
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Sid: "AllowLambdaServiceToAssumeRole"
+            Effect: "Allow"
+            Action:
+              - "sts:AssumeRole"
+            Principal:
+              Service:
+                - "lambda.amazonaws.com"
+                - "edgelambda.amazonaws.com"
+      Policies:
+        - PolicyName: "EdgeScheduleFunctionPolicy"
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: "Allow"
+                Action:
+                  - "kinesis:PutRecord"
+                  - "kinesis:PutRecords"
+                  - "kinesis:DescribeStream"
+                Resource:
+                  - !GetAtt EventStream.Arn
+
+  EventStream:
+    Type: AWS::Kinesis::Stream
+    Properties:
+      Name: !Sub "${stageName}EventStream"
+      RetentionPeriodHours: 168
+      StreamModeDetails:
+        StreamMode: ON_DEMAND
+
+  LambdaFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      CodeUri: backend/schedule/triggerKinesis
+      Handler: index.handler
+      Runtime: nodejs14.x
+      Timeout: 10
+      Tracing: Active
+      Events:
+        Stream:
+          Type: Kinesis
+          Properties:
+            Stream: !GetAtt EventStream.Arn
+            BatchSize: 100
+            StartingPosition: TRIM_HORIZON
+
+  SchedulerFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      CodeUri: backend/schedule/scheduledTrigger
+      Handler: index.handler
+      Runtime: nodejs14.x
+      Timeout: 60
+      MemorySize: 512
+      Events:
+        DispatchJobs:
+          Type: Schedule
+          Properties:
+            Schedule: rate(1 minute)
+
+  PinpointProject:
+    Type: AWS::Pinpoint::App
+    Properties:
+      Name: !Sub "${stageName}Impactly"
+
+  PushSendStream:
+    Type: AWS::Kinesis::Stream
+    Properties:
+      Name: !Sub "${stageName}PushSendStream"
+      RetentionPeriodHours: 168
+      StreamModeDetails:
+        StreamMode: ON_DEMAND
+
+  SendPushFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      Role: !GetAtt SendPushFunctionRoles.Arn
+      CodeUri: backend/push/pinpoint
+      Handler: app.handler
+      Runtime: nodejs14.x
+      Timeout: 10
+      Tracing: Active
+      Events:
+        Stream:
+          Type: Kinesis
+          Properties:
+            Stream: !GetAtt PushSendStream.Arn
+            BatchSize: 100
+            StartingPosition: TRIM_HORIZON
+      Environment:
+        Variables:
+          PINPOINT_APP_ID: !Ref PinpointProject
+
+  SendPushFunctionRoles:
+    Type: "AWS::IAM::Role"
+    Properties:
+      Path: "/"
+      ManagedPolicyArns:
+        - "arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole"
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Sid: "AllowLambdaServiceToAssumeRole"
+            Effect: "Allow"
+            Action:
+              - "sts:AssumeRole"
+            Principal:
+              Service:
+                - "lambda.amazonaws.com"
+                - "edgelambda.amazonaws.com"
+      Policies:
+        - PolicyName: "SendPushFunctionPolicy"
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: "Allow"
+                Action:
+                  - "kinesis:*"
+                Resource:
+                  - !GetAtt PushSendStream.Arn
+              - Effect: "Allow"
+                Action:
+                  - "mobiletargeting:SendMessages"
+                Resource:
+                  - !Sub "arn:aws:mobiletargeting:${AWS::Region}:${AWS::AccountId}:apps/${PinpointProject}/*"
+
+  SendImmediatePushFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      Role: !GetAtt SendImmediatePushFunctionRoles.Arn
+      CodeUri: backend/push/sendImmediate
+      Handler: app.handler
+      Runtime: nodejs14.x
+      Environment:
+        Variables:
+          KINESIS_ID: !Ref PushSendStream
+
+  SendImmediatePushFunctionPermission:
+    Type: AWS::Lambda::Permission
+    DependsOn:
+      - ImpactlyAPI
+    Properties:
+      Action: lambda:InvokeFunction
+      FunctionName: !Ref SendImmediatePushFunction
+      Principal: apigateway.amazonaws.com
+
+  SendImmediatePushFunctionRoute:
+    Type: AWS::ApiGatewayV2::Route
+    Properties:
+      ApiId: !Ref ImpactlyAPI
+      RouteKey: POST /sendPush
+      AuthorizationType: NONE
+      OperationName: sendPush
+      Target: !Join
+        - "/"
+        - - "integrations"
+          - !Ref SendImmediatePushFunctionInteg
+
+  SendImmediatePushFunctionInteg:
+    Type: AWS::ApiGatewayV2::Integration
+    Properties:
+      ApiId: !Ref ImpactlyAPI
+      Description: Connect Integration
+      PayloadFormatVersion: "1.0"
+      IntegrationType: AWS_PROXY
+      IntegrationUri:
+        Fn::Sub: arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${SendImmediatePushFunction.Arn}/invocations
+
+  SendImmediatePushFunctionRoles:
+    Type: "AWS::IAM::Role"
+    Properties:
+      Path: "/"
+      ManagedPolicyArns:
+        - "arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole"
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Sid: "AllowLambdaServiceToAssumeRole"
+            Effect: "Allow"
+            Action:
+              - "sts:AssumeRole"
+            Principal:
+              Service:
+                - "lambda.amazonaws.com"
+                - "edgelambda.amazonaws.com"
+      Policies:
+        - PolicyName: "SendImmediatePushFunctionPolicy"
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: "Allow"
+                Action:
+                  - "kinesis:PutRecord"
+                  - "kinesis:PutRecords"
+                  - "kinesis:DescribeStream"
+                Resource:
+                  - !GetAtt PushSendStream.Arn
+
+  AmplifyRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: 2012-10-17
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service:
+                - amplify.amazonaws.com
+            Action:
+              - sts:AssumeRole
+      Policies:
+        - PolicyName: Amplify
+          PolicyDocument:
+            Version: 2012-10-17
+            Statement:
+              - Effect: Allow
+                Action: "codecommit:*"
+                Resource: "*"
+              - Effect: Allow
+                Action: "amplify:*"
+                Resource: "*"
+
+  AmplifyApp:
+    Type: "AWS::Amplify::App"
+    Properties:
+      Name: !Sub "${stageName}-impactly"
+      Repository: https://git-codecommit.us-east-1.amazonaws.com/v1/repos/Impactly
+      Description: !Sub "${stageName} Impactly Dashboard"
+      # bug if buildSpec is not provided - https://github.com/aws-amplify/amplify-hosting/issues/1995
+      BuildSpec: |-
+        version: 1
+        applications:
+          - frontend:
+              phases:
+                preBuild:
+                  commands:
+                    - npm ci
+                build:
+                  commands:
+                    - npm run build
+              artifacts:
+                baseDirectory: .next
+                files:
+                  - '**/*'
+              cache:
+                paths:
+                  - node_modules/**/*
+            appRoot: frontend/app-impactly
+      IAMServiceRole: !GetAtt AmplifyRole.Arn
+      AutoBranchCreationConfig:
+        EnableAutoBranchCreation: false
+        EnableAutoBuild: true
+        Stage: PRODUCTION
+      #        Framework: "Next.js - SSR"  # found however not allowed in cloudformation https://awscli.amazonaws.com/v2/documentation/api/latest/reference/amplify/create-app.html
+      CustomRules:
+        - Source: "/<*>"
+          Target: "/index.html"
+          Status: "404-200"
+      EnvironmentVariables:
+        - Name: AMPLIFY_DIFF_DEPLOY
+          Value: true
+        - Name: AMPLIFY_MONOREPO_APP_ROOT
+          Value: frontend/app-impactly
+        - Name: _LIVE_UPDATES
+          Value: '[{"pkg":"next-version","type":"internal","version":"latest"}]'
+
+  AmplifyBranch:
+    Type: AWS::Amplify::Branch
+    Properties:
+      BranchName: !Ref BranchName
+      Stage: PRODUCTION # https://docs.aws.amazon.com/AWSCloudFormation/latest/UserGuide/aws-resource-amplify-branch.html#cfn-amplify-branch-stage
+      AppId: !GetAtt AmplifyApp.AppId
+      Description: !Sub "${BranchName} Branch"
+      EnableAutoBuild: true
+
+  AmplifyDomain:
+    Type: AWS::Amplify::Domain
+    Properties:
+      DomainName: !Ref domainNameWeb
+      AppId: !GetAtt AmplifyApp.AppId
+      SubDomainSettings:
+        - Prefix: "develop"
+          BranchName: !GetAtt AmplifyBranch.BranchName
+
+Outputs:
+  getPushFunctionArn:
+    Description: "getPushFunction function ARN"
+    Value: !GetAtt getPushFunction.Arn
+  createPushFunctionArn:
+    Description: "createPushFunction function ARN"
+    Value: !GetAtt createPushFunction.Arn
+  cognitoUserPoolId:
+    Value: !Ref UserPool
+  cognitoUserPoolClientId:
+    Value: !Ref UserPoolClient
+  cognitoIdentityPoolId:
+    Value: !Ref IdentityPool
+  cognitoUserPoolWebClientId:
+    Value: !Ref UserPoolDomain
+  webS3:
+    Value: !GetAtt S3BucketForWebsiteContent.Arn
+  # webCF:
+  #   Value: !Ref WebsiteCDN
+  domainNameWeb:
+    Value: !Ref domainNameWeb
+  environmentBucket:
+    Value: !Ref S3ForWorkerEnvironment
+  accountTestingDynamo:
+    Value: !Ref AccountTestingDynamo
+  testingDynamo:
+    Value: !Ref TestingDynamo
+  databaseHost:
+    Value: !GetAtt RDSCluster.Endpoint.Address
+  noReplyEmail:
+    Value: !Ref EmailSender
+  databaseName:
+    Value: !Sub "${stageName}_impactly_auroradb"
+  certificateArn:
+    Value: !Ref CertificateArn
+  subnetId1:
+    Value: !Ref PrivateSubnet1
+  subnetId2:
+    Value: !Ref PrivateSubnet2
+  securityGroupIds:
+    Value: !GetAtt VPC.DefaultSecurityGroup
+  domain:
+    Value: !Ref domainNameAPI
+
+  # SendPushFunctionURL:
+  #   Value: !GetAtt SendPushFunction.FunctionUrl
